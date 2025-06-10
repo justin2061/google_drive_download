@@ -1,0 +1,104 @@
+# Google Drive 下載工具配置檔案
+
+# 應用程式設定
+app:
+  name: "Google Drive Downloader"
+  version: "2.0.0"
+  debug: false
+  data_dir: "./data"
+  temp_dir: "./temp"
+
+# 認證設定
+auth:
+  credentials_file: "credentials.json"
+  token_file: "token.pickle"
+  port: 8080
+  scopes:
+    - "https://www.googleapis.com/auth/drive.readonly"
+
+# 下載設定
+download:
+  max_concurrent: 5
+  max_retries: 3
+  retry_delay_base: 2  # 基礎重試延遲（秒）
+  retry_delay_max: 60  # 最大重試延遲（秒）
+  chunk_size: 1048576  # 1MB
+  timeout: 300  # 5 分鐘
+  default_output_dir: "./downloads"
+  create_timestamp_folders: true
+  preserve_folder_structure: true
+  
+  # 預設檔案格式
+  preferred_formats:
+    documents: "docx"  # Google Docs -> DOCX
+    spreadsheets: "xlsx"  # Google Sheets -> XLSX
+    presentations: "pptx"  # Google Slides -> PPTX
+    drawings: "png"  # Google Drawings -> PNG
+
+# 日誌設定
+logging:
+  level: "INFO"
+  format: "detailed"
+  console:
+    enabled: true
+    color: true
+  file:
+    enabled: true
+    path: "logs/app.log"
+    max_size: 10485760  # 10MB
+    backup_count: 5
+    rotation: true
+
+# 進度追蹤設定
+progress:
+  update_interval: 1.0  # 更新間隔（秒）
+  history_retention: 100  # 保留歷史記錄數量
+  enable_eta: true
+  enable_speed_calculation: true
+
+# 錯誤處理設定
+error_handling:
+  auto_retry: true
+  skip_on_error: false
+  detailed_error_logging: true
+  error_report_file: "logs/errors.log"
+
+# 快取設定
+cache:
+  enabled: true
+  ttl: 3600  # 1 小時
+  max_entries: 1000
+  file_metadata_cache: true
+
+# Web 介面設定
+ui:
+  enabled: true
+  host: "localhost"
+  port: 8501
+  theme: "light"
+  auto_open_browser: true
+
+# API 設定
+api:
+  rate_limit:
+    requests_per_minute: 100
+    requests_per_hour: 1000
+  quota_management:
+    enabled: true
+    daily_limit: 1000000000  # 1GB
+    alert_threshold: 0.8  # 80%
+
+# 安全設定
+security:
+  validate_file_paths: true
+  allow_overwrite: false
+  sanitize_filenames: true
+  max_filename_length: 255
+  blocked_extensions: [".exe", ".bat", ".cmd", ".scr"]
+
+# 開發設定
+development:
+  hot_reload: false
+  profiling: false
+  mock_api: false
+  test_mode: false 

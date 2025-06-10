@@ -1,0 +1,32 @@
+--stdin=0913/*
+credentials.json
+output/*
+venv/*
+save_error.json
+token.pickle
+
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+test_env/
+
+# Download-Google-Drive-Files-From-URLs/*
+# gdrive-folder-downloader/*
+
+dist/
+
+credentials-dev.json
+credentials-prod.json
+credentials*.json
+
+logs/
+logs/app.log

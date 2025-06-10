@@ -1,0 +1,74 @@
+# Google Drive 下載工具依賴套件
+
+# Google API 客戶端
+google-api-python-client==2.110.0
+google-auth-httplib2==0.2.0
+google-auth-oauthlib==1.2.0
+google-auth==2.25.2
+
+# 非同步和 HTTP 客戶端
+aiohttp==3.9.1
+aiofiles==24.1.0
+httpx==0.25.2
+
+# Web 介面
+streamlit==1.29.0
+plotly==5.17.0
+
+# 命令列介面
+click==8.1.7
+rich==13.7.0
+
+# 配置和資料處理
+pyyaml==6.0.1
+toml==0.10.2
+pandas==2.1.4
+
+# 日誌和監控
+colorlog==6.8.0
+structlog==23.2.0
+
+# 測試框架
+pytest==7.4.3
+pytest-cov==4.1.0
+pytest-asyncio==0.21.1
+pytest-mock==3.12.0
+
+# 程式碼品質
+black==23.12.0
+flake8==6.1.0
+isort==5.13.2
+mypy==1.7.1
+
+# 文件生成
+sphinx==7.2.6
+sphinx-rtd-theme==1.3.0
+
+# 開發工具
+pre-commit==3.6.0
+tox==4.11.4
+
+# 資料庫 (sqlite3 是內建模組)
+
+# 進度條和格式化
+tqdm==4.66.1
+humanize==4.9.0
+
+# 檔案處理
+requests==2.31.0
+
+# 安全性
+cryptography>=41.0.0
+
+# 任務佇列（可選）
+celery==5.3.4
+redis==5.0.1
+
+# 打包和分發
+cx-Freeze==6.15.10  # 替代 py2exe，跨平台
+pyinstaller==6.2.0
+
+# 其他實用工具
+arrow==1.3.0  # 更好的日期時間處理
+python-dotenv==1.0.0  # 環境變數管理
+psutil==5.9.6  # 系統資源監控 
