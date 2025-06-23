@@ -1,15 +1,65 @@
---stdin=0913/*
-credentials.json
-output/*
-venv/*
-save_error.json
-token.pickle
+# ==========================================
+# 敏感資訊保護 (Security & Credentials)
+# ==========================================
 
+# Google OAuth 認證檔案
+credentials.json
+credentials-*.json
+credentials*.json
+*credentials*.json
+
+# 認證令牌檔案
+token.pickle
+*.pickle
+*.token
+*token*
+simple_token.pickle
+
+# 服務帳戶金鑰
+service_account.json
+service-account*.json
+*service_account*.json
+*.pem
+*.p12
+*.key
+
+# 環境變數和配置
+.env
+.env.*
+*.env
+*secret*
+*password*
+*api_key*
+*private_key*
+
+# 其他敏感檔案
+save_error.json
+
+# ==========================================
+# 輸出和暫存檔案
+# ==========================================
+
+# 下載輸出目錄
+output/*
+downloads/*
+temp/*
+tmp/*
+
+# 日誌檔案
+logs/
+logs/app.log
+*.log
+
+# ==========================================
+# Python 相關
+# ==========================================
+
+# 位元組編譯檔案
 __pycache__/
 *.py[cod]
 *$py.class
 
-# Environments
+# 虛擬環境
 .env
 .venv
 env/
@@ -19,14 +69,60 @@ env.bak/
 venv.bak/
 test_env/
 
-# Download-Google-Drive-Files-From-URLs/*
-# gdrive-folder-downloader/*
-
+# 發布檔案
 dist/
+build/
+*.egg-info/
 
-credentials-dev.json
-credentials-prod.json
-credentials*.json
+# ==========================================
+# 開發和測試
+# ==========================================
 
-logs/
-logs/app.log
+# IDE 和編輯器檔案
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 測試覆蓋率
+.coverage
+htmlcov/
+.pytest_cache/
+
+# ==========================================
+# 系統檔案
+# ==========================================
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux
+*~
+
+# ==========================================
+# 專案特定排除
+# ==========================================
+
+# 備份和舊版本檔案
+*.bak
+*.backup
+*.old
+*.orig
+
+# 資料庫檔案
+*.db
+*.sqlite
+*.sqlite3
+
+# 快取檔案
+.cache/
+cache/
+*.cache
