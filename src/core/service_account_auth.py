@@ -10,11 +10,11 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-from ..utils.logger import LoggerMixin
+from .base_auth import BaseAuth
 from ..utils.exceptions import AuthenticationError, ConfigurationError
 
 
-class ServiceAccountAuth(LoggerMixin):
+class ServiceAccountAuth(BaseAuth):
     """Service Account 認證提供者
     
     使用服務帳戶進行認證，無需使用者互動
@@ -29,14 +29,12 @@ class ServiceAccountAuth(LoggerMixin):
             service_account_file: 服務帳戶 JSON 檔案路徑
             scopes: 權限範圍清單
         """
-        self.service_account_file = service_account_file or 'service_account.json'
-        self.scopes = scopes or [
+        default_scopes = scopes or [
             'https://www.googleapis.com/auth/drive',
             'https://www.googleapis.com/auth/drive.file'
         ]
-        
-        self._credentials = None
-        self._drive_service = None
+        super().__init__(default_scopes)
+        self.service_account_file = service_account_file or 'service_account.json'
         
         self.logger.info("Service Account 認證已初始化")
     

@@ -142,7 +142,7 @@ class FileHandler(LoggerMixin):
             
             file_info = drive_service.files().get(
                 fileId=file_id,
-                fields='id,name,mimeType,size,createdTime,modifiedTime,parents,webViewLink,downloadable'
+                fields='id,name,mimeType,size,createdTime,modifiedTime,parents,webViewLink'
             ).execute()
             
             self.logger.debug(f"取得檔案資訊: {file_info.get('name')}")

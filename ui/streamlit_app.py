@@ -57,7 +57,7 @@ def init_session_state():
     if 'user_info' not in st.session_state:
         st.session_state.user_info = None
     if 'auto_refresh' not in st.session_state:
-        st.session_state.auto_refresh = True
+        st.session_state.auto_refresh = False  # 預設關閉自動重新整理，避免頁面一直running
 
 
 def check_authentication():
@@ -67,7 +67,16 @@ def check_authentication():
         if auth_manager.is_authenticated():
             if not st.session_state.authenticated:
                 st.session_state.authenticated = True
-                st.session_state.user_info = auth_manager.get_user_info()
+                # 只在第一次認證時取得用戶資訊，避免重複API呼叫
+                try:
+                    st.session_state.user_info = auth_manager.get_user_info()
+                except Exception as e:
+                    logger.warning(f"取得用戶資訊失敗: {e}")
+                    st.session_state.user_info = {
+                        'email': 'Unknown',
+                        'display_name': 'Unknown User',
+                        'is_authenticated': True
+                    }
             return True
         else:
             st.session_state.authenticated = False
@@ -112,11 +121,21 @@ def authentication_page():
                     # 嘗試 ADC 認證（不強制刷新）
                     success = auth_manager.authenticate()
                     if success:
-                        st.success("🎉 ADC 認證成功！自動跳轉到主頁面...")
-                        time.sleep(1)
+                        # 檢查實際使用的認證方式
+                        current_method = auth_manager._current_auth_method
+                        if current_method == "adc":
+                            st.success("🎉 ADC 認證成功！自動跳轉到主頁面...")
+                        elif current_method == "oauth":
+                            st.success("🎉 使用現有 OAuth 認證成功！自動跳轉到主頁面...")
+                            st.info("💡 提示：ADC 不可用，已自動使用 OAuth 認證")
+                        else:
+                            st.success("🎉 認證成功！自動跳轉到主頁面...")
+                        
+                        time.sleep(2)  # 增加一點時間讓用戶看到訊息
                         st.rerun()
                     else:
-                        st.info("ℹ️ 沒有找到 ADC 認證，請使用下方的手動認證")
+                        st.error("❌ 認證失敗")
+                        st.info("ℹ️ 沒有找到可用的認證，請使用下方的手動認證或檢查設定")
         
         with col2:
             if st.button("📖 ADC 設定指南", use_container_width=True):
@@ -885,6 +904,561 @@ def tasks_page():
             st.markdown("---")
 
 
+def get_root_folder_contents():
+    """取得根資料夾的內容"""
+    try:
+        # 先取得 Drive 服務
+        drive_service = auth_manager.get_drive_service()
+        
+        # 直接列出根目錄下的資料夾（不需要取得 rootFolderId）
+        results = drive_service.files().list(
+            q="'root' in parents and trashed=false",
+            orderBy='folder,name',
+            pageSize=100,
+            fields='files(id,name,mimeType,modifiedTime,size,parents)'
+        ).execute()
+        return results.get('files', [])
+        
+    except Exception as e:
+        logger.error(f"取得根資料夾內容失敗: {e}")
+        st.error(f"無法載入 Google Drive 內容: {e}")
+        return []
+
+
+def folder_browser_page():
+    """資料夾瀏覽頁面"""
+    st.header("📁 Google Drive 資料夾瀏覽")
+    
+    # 當前路徑顯示
+    if 'current_folder_id' not in st.session_state:
+        st.session_state.current_folder_id = None
+        st.session_state.current_folder_name = "我的雲端硬碟"
+        st.session_state.folder_path = ["我的雲端硬碟"]
+        st.session_state.folder_id_path = [None]
+    
+    # 路徑導航
+    st.markdown("### 📍 當前位置")
+    
+    # 顯示面包屑導航
+    breadcrumb_cols = st.columns(len(st.session_state.folder_path))
+    for i, (folder_name, folder_id) in enumerate(zip(st.session_state.folder_path, st.session_state.folder_id_path)):
+        with breadcrumb_cols[i]:
+            if st.button(f"📁 {folder_name}", key=f"breadcrumb_{i}"):
+                # 點擊面包屑導航
+                st.session_state.current_folder_id = folder_id
+                st.session_state.current_folder_name = folder_name
+                st.session_state.folder_path = st.session_state.folder_path[:i+1]
+                st.session_state.folder_id_path = st.session_state.folder_id_path[:i+1]
+                st.rerun()
+    
+    st.markdown("---")
+    
+    # 搜尋和篩選區域
+    with st.expander("🔍 搜尋與篩選", expanded=False):
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            search_query = st.text_input("🔍 搜尋檔案/資料夾", placeholder="輸入關鍵字...")
+        
+        with col2:
+            file_type_filter = st.selectbox(
+                "📄 檔案類型篩選",
+                ["全部", "僅資料夾", "僅檔案", "Google 文件", "圖片", "影片", "PDF"],
+                index=0
+            )
+        
+        with col3:
+            sort_order = st.selectbox(
+                "📊 排序方式",
+                ["名稱 (A-Z)", "名稱 (Z-A)", "修改時間 (新→舊)", "修改時間 (舊→新)", "大小 (大→小)", "大小 (小→大)"],
+                index=0
+            )
+    
+    # 載入資料夾內容
+    with st.spinner("🔄 載入資料夾內容..."):
+        if st.session_state.current_folder_id is None:
+            # 載入根資料夾
+            folder_contents = get_root_folder_contents()
+        else:
+            # 載入指定資料夾
+            try:
+                folder_contents = file_handler.get_folder_contents(st.session_state.current_folder_id, recursive=False)
+            except Exception as e:
+                st.error(f"載入資料夾失敗: {e}")
+                folder_contents = []
+    
+    if not folder_contents:
+        st.info("📭 此資料夾是空的或載入失敗")
+        return
+    
+    # 應用搜尋篩選
+    if search_query:
+        folder_contents = [
+            item for item in folder_contents 
+            if search_query.lower() in item.get('name', '').lower()
+        ]
+    
+    # 應用檔案類型篩選
+    if file_type_filter == "僅資料夾":
+        folder_contents = [item for item in folder_contents if item.get('mimeType') == 'application/vnd.google-apps.folder']
+    elif file_type_filter == "僅檔案":
+        folder_contents = [item for item in folder_contents if item.get('mimeType') != 'application/vnd.google-apps.folder']
+    elif file_type_filter == "Google 文件":
+        folder_contents = [item for item in folder_contents if 'google-apps' in item.get('mimeType', '')]
+    elif file_type_filter == "圖片":
+        folder_contents = [item for item in folder_contents if item.get('mimeType', '').startswith('image/')]
+    elif file_type_filter == "影片":
+        folder_contents = [item for item in folder_contents if item.get('mimeType', '').startswith('video/')]
+    elif file_type_filter == "PDF":
+        folder_contents = [item for item in folder_contents if item.get('mimeType') == 'application/pdf']
+    
+    # 應用排序
+    if sort_order == "名稱 (A-Z)":
+        folder_contents.sort(key=lambda x: x.get('name', '').lower())
+    elif sort_order == "名稱 (Z-A)":
+        folder_contents.sort(key=lambda x: x.get('name', '').lower(), reverse=True)
+    elif sort_order == "修改時間 (新→舊)":
+        folder_contents.sort(key=lambda x: x.get('modifiedTime', ''), reverse=True)
+    elif sort_order == "修改時間 (舊→新)":
+        folder_contents.sort(key=lambda x: x.get('modifiedTime', ''))
+    elif sort_order == "大小 (大→小)":
+        folder_contents.sort(key=lambda x: int(x.get('size', 0)), reverse=True)
+    elif sort_order == "大小 (小→大)":
+        folder_contents.sort(key=lambda x: int(x.get('size', 0)))
+    
+    # 分離資料夾和檔案
+    folders = [item for item in folder_contents if item.get('mimeType') == 'application/vnd.google-apps.folder']
+    files = [item for item in folder_contents if item.get('mimeType') != 'application/vnd.google-apps.folder']
+    
+    # 統計資訊
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("📁 資料夾數量", len(folders))
+    with col2:
+        st.metric("📄 檔案數量", len(files))
+    with col3:
+        if files:
+            total_size = sum(int(f.get('size', 0)) for f in files if f.get('size'))
+            st.metric("💾 總大小", format_bytes(total_size))
+        else:
+            st.metric("💾 總大小", "N/A")
+    
+    st.markdown("---")
+    
+    # 快速操作區域
+    if st.session_state.current_folder_id is not None:
+        with st.container():
+            st.markdown("### ⚡ 快速操作")
+            quick_col1, quick_col2, quick_col3 = st.columns(3)
+            
+            with quick_col1:
+                if st.button("📥 下載整個資料夾", use_container_width=True, type="primary"):
+                    # 下載當前資料夾
+                    current_folder = {
+                        'id': st.session_state.current_folder_id,
+                        'name': st.session_state.current_folder_name
+                    }
+                    st.session_state.selected_folder_for_download = current_folder
+                    st.session_state.show_download_options = True
+                    st.rerun()
+            
+            with quick_col2:
+                if st.button("🔄 重新整理", use_container_width=True):
+                    st.rerun()
+            
+            with quick_col3:
+                if st.button("🔙 回到上層", use_container_width=True):
+                    if len(st.session_state.folder_path) > 1:
+                        st.session_state.folder_path.pop()
+                        st.session_state.folder_id_path.pop()
+                        st.session_state.current_folder_id = st.session_state.folder_id_path[-1]
+                        st.session_state.current_folder_name = st.session_state.folder_path[-1]
+                        st.rerun()
+        
+        st.markdown("---")
+    
+    # 資料夾顯示
+    if folders:
+        st.subheader("📁 資料夾")
+        
+        # 創建資料夾網格布局
+        folder_cols = 3
+        folder_rows = (len(folders) + folder_cols - 1) // folder_cols
+        
+        for row in range(folder_rows):
+            cols = st.columns(folder_cols)
+            for col_idx in range(folder_cols):
+                folder_idx = row * folder_cols + col_idx
+                if folder_idx < len(folders):
+                    folder = folders[folder_idx]
+                    
+                    with cols[col_idx]:
+                        with st.container():
+                            # 資料夾卡片
+                            import html
+                            folder_name = folder.get('name', '未命名資料夾')
+                            folder_name_display = html.escape(folder_name[:20] + ('...' if len(folder_name) > 20 else ''))
+                            modified_time = folder.get('modifiedTime', 'N/A')[:10] if folder.get('modifiedTime') else 'N/A'
+                            
+                            st.markdown(f"""
+                            <div style="
+                                border: 1px solid #ddd; 
+                                border-radius: 8px; 
+                                padding: 15px; 
+                                margin: 5px; 
+                                background-color: #f8f9fa;
+                                text-align: center;
+                                min-height: 120px;
+                                display: flex;
+                                flex-direction: column;
+                                justify-content: space-between;
+                                transition: transform 0.2s;
+                            ">
+                                <div>
+                                    <div style="font-size: 24px; margin-bottom: 8px;">📁</div>
+                                    <div style="font-weight: bold; font-size: 14px; margin-bottom: 5px; word-wrap: break-word;">
+                                        {folder_name_display}
+                                    </div>
+                                    <div style="font-size: 12px; color: #666;">
+                                        修改時間: {modified_time}
+                                    </div>
+                                </div>
+                            </div>
+                            """, unsafe_allow_html=True)
+                            
+                            # 操作按鈕
+                            button_col1, button_col2 = st.columns(2)
+                            
+                            with button_col1:
+                                if st.button("🔍 進入", key=f"enter_folder_{folder['id']}", use_container_width=True):
+                                    # 進入資料夾
+                                    st.session_state.current_folder_id = folder['id']
+                                    st.session_state.current_folder_name = folder['name']
+                                    st.session_state.folder_path.append(folder['name'])
+                                    st.session_state.folder_id_path.append(folder['id'])
+                                    st.rerun()
+                            
+                            with button_col2:
+                                if st.button("📥 下載", key=f"download_folder_{folder['id']}", use_container_width=True):
+                                    # 添加下載任務
+                                    st.session_state.selected_folder_for_download = folder
+                                    st.session_state.show_download_options = True
+                                    st.rerun()
+        
+        st.markdown("---")
+    
+    # 檔案顯示（改進版本）
+    if files:
+        st.subheader("📄 檔案")
+        
+        # 檔案視圖切換
+        view_mode = st.radio("顯示模式", ["表格視圖", "卡片視圖"], horizontal=True)
+        
+        if view_mode == "表格視圖":
+            # 檔案清單（表格形式）
+            file_data = []
+            for file in files[:50]:  # 最多顯示 50 個檔案
+                # 檔案類型圖示
+                mime_type = file.get('mimeType', '')
+                if 'google-apps.document' in mime_type:
+                    icon = "📝"
+                elif 'google-apps.spreadsheet' in mime_type:
+                    icon = "📊"
+                elif 'google-apps.presentation' in mime_type:
+                    icon = "📽️"
+                elif mime_type.startswith('image/'):
+                    icon = "🖼️"
+                elif mime_type.startswith('video/'):
+                    icon = "🎥"
+                elif 'pdf' in mime_type:
+                    icon = "📕"
+                else:
+                    icon = "📄"
+                
+                # 處理檔案名稱
+                file_name = file.get('name', '未命名檔案')
+                file_name_display = file_name[:40] + ('...' if len(file_name) > 40 else '')
+                
+                file_data.append({
+                    '類型': icon,
+                    '名稱': file_name_display,
+                    '大小': format_bytes(int(file.get('size', 0))) if file.get('size') else 'N/A',
+                    '修改時間': file.get('modifiedTime', 'N/A')[:10] if file.get('modifiedTime') else 'N/A'
+                })
+            
+            if file_data:
+                df = pd.DataFrame(file_data)
+                st.dataframe(df, use_container_width=True)
+                
+                if len(files) > 50:
+                    st.info(f"顯示前 50 個檔案，共 {len(files)} 個檔案")
+        
+        else:  # 卡片視圖
+            file_cols = 4
+            file_rows = (min(len(files), 20) + file_cols - 1) // file_cols
+            
+            for row in range(file_rows):
+                cols = st.columns(file_cols)
+                for col_idx in range(file_cols):
+                    file_idx = row * file_cols + col_idx
+                    if file_idx < min(len(files), 20):
+                        file = files[file_idx]
+                        
+                        with cols[col_idx]:
+                            # 檔案類型圖示
+                            import html
+                            mime_type = file.get('mimeType', '')
+                            if 'google-apps.document' in mime_type:
+                                icon = "📝"
+                                color = "#4285f4"
+                            elif 'google-apps.spreadsheet' in mime_type:
+                                icon = "📊"
+                                color = "#34a853"
+                            elif 'google-apps.presentation' in mime_type:
+                                icon = "📽️"
+                                color = "#fbbc04"
+                            elif mime_type.startswith('image/'):
+                                icon = "🖼️"
+                                color = "#ea4335"
+                            elif mime_type.startswith('video/'):
+                                icon = "🎥"
+                                color = "#9c27b0"
+                            elif 'pdf' in mime_type:
+                                icon = "📕"
+                                color = "#ff5722"
+                            else:
+                                icon = "📄"
+                                color = "#757575"
+                            
+                            # 檔案名稱處理
+                            file_name = file.get('name', '未命名檔案')
+                            file_name_display = html.escape(file_name[:15] + ('...' if len(file_name) > 15 else ''))
+                            file_size = format_bytes(int(file.get('size', 0))) if file.get('size') else 'N/A'
+                            
+                            st.markdown(f"""
+                            <div style="
+                                border: 1px solid #ddd; 
+                                border-radius: 8px; 
+                                padding: 10px; 
+                                margin: 3px; 
+                                background-color: #fff;
+                                text-align: center;
+                                min-height: 100px;
+                                border-left: 4px solid {color};
+                            ">
+                                <div style="font-size: 20px; margin-bottom: 5px;">{icon}</div>
+                                <div style="font-size: 12px; font-weight: bold; margin-bottom: 3px; word-wrap: break-word;">
+                                    {file_name_display}
+                                </div>
+                                <div style="font-size: 10px; color: #666;">
+                                    {file_size}
+                                </div>
+                            </div>
+                            """, unsafe_allow_html=True)
+            
+            if len(files) > 20:
+                st.info(f"顯示前 20 個檔案，共 {len(files)} 個檔案")
+    
+    # 下載選項對話框
+    if st.session_state.get('show_download_options', False):
+        st.markdown("---")
+        st.subheader("📥 下載設定")
+        
+        selected_folder = st.session_state.get('selected_folder_for_download')
+        if selected_folder:
+            st.info(f"準備下載資料夾: **{selected_folder['name']}**")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("**下載選項**")
+                include_subfolders = st.checkbox("包含子資料夾", value=True)
+                max_concurrent = st.slider("最大並發數", min_value=1, max_value=10, value=3)
+                preferred_format = st.selectbox(
+                    "Google Workspace 檔案格式",
+                    ["pdf", "docx", "xlsx", "pptx", "txt", "html"],
+                    index=0
+                )
+            
+            with col2:
+                st.markdown("**輸出設定**")
+                output_path = st.text_input(
+                    "輸出路徑",
+                    value=str(Path("output") / selected_folder['name']),
+                    help="下載檔案的儲存位置"
+                )
+                
+                # 預估資訊
+                try:
+                    with st.spinner("計算資料夾大小..."):
+                        folder_stats = file_handler.get_download_stats(
+                            file_handler.get_folder_contents(selected_folder['id'], recursive=include_subfolders)
+                        )
+                    
+                    st.markdown("**預估資訊**")
+                    st.text(f"檔案數量: {folder_stats.get('total_files', 0)}")
+                    st.text(f"總大小: {format_bytes(folder_stats.get('total_size', 0))}")
+                    
+                except Exception as e:
+                    st.warning(f"無法計算資料夾大小: {e}")
+            
+            # 下載按鈕
+            button_col1, button_col2, button_col3 = st.columns([1, 1, 1])
+            
+            with button_col1:
+                if st.button("✅ 開始下載", type="primary", use_container_width=True):
+                    # 創建下載任務
+                    try:
+                        folder_url = f"https://drive.google.com/drive/folders/{selected_folder['id']}"
+                        
+                        task_id = download_manager.create_task(
+                            source_url=folder_url,
+                            output_path=Path(output_path),
+                            max_concurrent=max_concurrent,
+                            preferred_format=preferred_format
+                        )
+                        
+                        st.success(f"✅ 下載任務已創建！任務 ID: {task_id}")
+                        
+                        # 清除狀態
+                        st.session_state.show_download_options = False
+                        st.session_state.selected_folder_for_download = None
+                        
+                        # 切換到任務管理頁面
+                        time.sleep(1)
+                        st.rerun()
+                        
+                    except Exception as e:
+                        st.error(f"❌ 創建下載任務失敗: {e}")
+            
+            with button_col2:
+                if st.button("❌ 取消", use_container_width=True):
+                    st.session_state.show_download_options = False
+                    st.session_state.selected_folder_for_download = None
+                    st.rerun()
+            
+            with button_col3:
+                if st.button("🔍 預覽內容", use_container_width=True):
+                    # 顯示資料夾詳細內容
+                    st.session_state.show_folder_preview = True
+                    st.rerun()
+
+    # 資料夾預覽對話框
+    if st.session_state.get('show_folder_preview', False):
+        st.markdown("---")
+        st.subheader("🔍 資料夾詳細預覽")
+        
+        selected_folder = st.session_state.get('selected_folder_for_download')
+        if selected_folder:
+            st.info(f"預覽資料夾: **{selected_folder['name']}**")
+            
+            try:
+                with st.spinner("載入資料夾內容詳細資訊..."):
+                    preview_contents = file_handler.get_folder_contents(selected_folder['id'], recursive=True)
+                
+                # 統計分析
+                total_files = len([f for f in preview_contents if f.get('mimeType') != 'application/vnd.google-apps.folder'])
+                total_folders = len([f for f in preview_contents if f.get('mimeType') == 'application/vnd.google-apps.folder'])
+                total_size = sum(int(f.get('size', 0)) for f in preview_contents if f.get('size'))
+                
+                # 檔案類型統計
+                file_types = {}
+                for item in preview_contents:
+                    if item.get('mimeType') != 'application/vnd.google-apps.folder':
+                        mime_type = item.get('mimeType', 'unknown')
+                        if 'google-apps.document' in mime_type:
+                            file_types['Google 文件'] = file_types.get('Google 文件', 0) + 1
+                        elif 'google-apps.spreadsheet' in mime_type:
+                            file_types['Google 試算表'] = file_types.get('Google 試算表', 0) + 1
+                        elif 'google-apps.presentation' in mime_type:
+                            file_types['Google 簡報'] = file_types.get('Google 簡報', 0) + 1
+                        elif mime_type.startswith('image/'):
+                            file_types['圖片'] = file_types.get('圖片', 0) + 1
+                        elif mime_type.startswith('video/'):
+                            file_types['影片'] = file_types.get('影片', 0) + 1
+                        elif 'pdf' in mime_type:
+                            file_types['PDF'] = file_types.get('PDF', 0) + 1
+                        else:
+                            file_types['其他'] = file_types.get('其他', 0) + 1
+                
+                # 顯示統計資訊
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("### 📊 內容統計")
+                    st.metric("📁 子資料夾", total_folders)
+                    st.metric("📄 檔案總數", total_files) 
+                    st.metric("💾 總大小", format_bytes(total_size))
+                    
+                    # 檔案類型分佈圓餅圖
+                    if file_types:
+                        fig_pie = px.pie(
+                            values=list(file_types.values()),
+                            names=list(file_types.keys()),
+                            title="檔案類型分佈"
+                        )
+                        st.plotly_chart(fig_pie, use_container_width=True)
+                
+                with col2:
+                    st.markdown("### 📝 檔案類型詳細")
+                    for file_type, count in file_types.items():
+                        st.text(f"{file_type}: {count} 個")
+                    
+                    # 最大的檔案
+                    largest_files = sorted(
+                        [f for f in preview_contents if f.get('size')],
+                        key=lambda x: int(x.get('size', 0)),
+                        reverse=True
+                    )[:5]
+                    
+                    if largest_files:
+                        st.markdown("### 📈 最大的檔案")
+                        for file in largest_files:
+                            st.text(f"📄 {file['name'][:30]}... - {format_bytes(int(file.get('size', 0)))}")
+                
+                # 資料夾結構樹
+                st.markdown("### 🌳 資料夾結構")
+                
+                # 構建資料夾樹狀結構
+                folder_tree = {}
+                for item in preview_contents:
+                    if item.get('mimeType') == 'application/vnd.google-apps.folder':
+                        parents = item.get('parents', [])
+                        if parents:
+                            parent_id = parents[0]
+                            if parent_id not in folder_tree:
+                                folder_tree[parent_id] = []
+                            folder_tree[parent_id].append(item['name'])
+                
+                # 顯示樹狀結構（簡化版）
+                for parent, children in list(folder_tree.items())[:10]:  # 限制顯示數量
+                    for child in children[:5]:  # 每個父資料夾最多顯示5個子資料夾
+                        st.text(f"📁 {child}")
+                
+                if len(folder_tree) > 10:
+                    st.info(f"還有 {len(folder_tree) - 10} 個資料夾未顯示...")
+                
+                # 操作按鈕
+                button_preview_col1, button_preview_col2 = st.columns(2)
+                
+                with button_preview_col1:
+                    if st.button("📥 確認下載此資料夾", type="primary", use_container_width=True):
+                        st.session_state.show_folder_preview = False
+                        # 保持下載選項開啟
+                        st.rerun()
+                
+                with button_preview_col2:
+                    if st.button("❌ 關閉預覽", use_container_width=True):
+                        st.session_state.show_folder_preview = False
+                        st.rerun()
+                
+            except Exception as e:
+                st.error(f"載入資料夾預覽失敗: {e}")
+                if st.button("❌ 關閉預覽"):
+                    st.session_state.show_folder_preview = False
+                    st.rerun()
+
+
 def main():
     """主函數"""
     # 初始化
@@ -898,19 +1472,21 @@ def main():
     # 側邊欄
     sidebar()
     
-    # 主要內容
-    tab1, tab2 = st.tabs(["📥 下載", "📋 任務管理"])
+    # 主要內容 - 新增資料夾瀏覽 tab
+    tab1, tab2, tab3 = st.tabs(["🌐 資料夾瀏覽", "📥 下載", "📋 任務管理"])
     
     with tab1:
-        download_page()
+        folder_browser_page()
     
     with tab2:
+        download_page()
+    
+    with tab3:
         tasks_page()
     
-    # 自動重新整理
-    if st.session_state.auto_refresh:
-        time.sleep(5)
-        st.rerun()
+    # 自動重新整理（只在任務管理頁面需要時使用）
+    # 移除全域自動重新整理，避免造成頁面一直running的問題
+    # 如果需要即時更新，請在特定元件中使用 st.empty() 和手動更新
 
 
 if __name__ == "__main__":

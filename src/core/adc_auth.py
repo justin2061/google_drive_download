@@ -7,11 +7,11 @@ from google.auth import default
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-from ..utils.logger import LoggerMixin
+from .base_auth import BaseAuth
 from ..utils.exceptions import AuthenticationError
 
 
-class ADCAuth(LoggerMixin):
+class ADCAuth(BaseAuth):
     """Application Default Credentials 認證提供者
     
     自動使用環境中可用的認證：
@@ -27,13 +27,7 @@ class ADCAuth(LoggerMixin):
         Args:
             scopes: 權限範圍清單
         """
-        self.scopes = scopes or [
-            'https://www.googleapis.com/auth/drive.readonly'
-        ]
-        
-        self._credentials = None
-        self._drive_service = None
-        
+        super().__init__(scopes)
         self.logger.info("ADC 認證已初始化")
     
     def authenticate(self) -> bool:
@@ -71,9 +65,10 @@ class ADCAuth(LoggerMixin):
             )
             
             # 測試連線
-            about = self._drive_service.about().get(fields="user").execute()  # type: ignore
+            about = self._drive_service.about().get(fields="user").execute()
             user_email = about.get('user', {}).get('emailAddress', 'Unknown')
             
+            self._authenticated = True
             self.logger.info(f"✅ ADC 認證成功 - 使用者: {user_email}")
             self.logger.info(f"專案 ID: {project}")
             return True

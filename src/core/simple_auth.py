@@ -13,11 +13,11 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
-from ..utils.logger import LoggerMixin
+from .base_auth import BaseAuth
 from ..utils.exceptions import AuthenticationError
 
 
-class SimpleUserAuth(LoggerMixin):
+class SimpleUserAuth(BaseAuth):
     """簡化的使用者認證
     
     自動處理常見的認證場景，減少配置複雜度
@@ -42,20 +42,19 @@ class SimpleUserAuth(LoggerMixin):
             scopes: 權限範圍 ('readonly', 'file', 'full')
             token_file: 令牌儲存檔案
         """
-        self.client_id = client_id
-        self.client_secret = client_secret
-        self.token_file = token_file
-        
         # 設定權限範圍
         scope_mapping = {
             'readonly': self.SCOPES_READONLY,
             'file': self.SCOPES_FILE,
             'full': self.SCOPES_FULL
         }
-        self.scopes = scope_mapping.get(scopes, self.SCOPES_READONLY)
+        selected_scopes = scope_mapping.get(scopes, self.SCOPES_READONLY)
         
-        self._credentials = None
-        self._drive_service = None
+        super().__init__(selected_scopes)
+        
+        self.client_id = client_id
+        self.client_secret = client_secret
+        self.token_file = token_file
         
         self.logger.info(f"簡化認證已初始化 - 權限: {scopes}")
     

@@ -15,6 +15,47 @@ auth:
   port: 8080
   scopes:
     - "https://www.googleapis.com/auth/drive.readonly"
+  
+  # 認證策略配置
+  preferred_types:
+    - "adc"
+    - "oauth"
+    - "service_account"
+  
+  # 安全儲存配置
+  secure_storage:
+    enabled: true
+    storage_dir: "tokens"
+    encryption_enabled: true
+    token_ttl_hours: 24
+  
+  # 重試機制配置
+  retry:
+    max_retries: 3
+    base_delay: 1.0
+    max_delay: 60.0
+    strategy: "exponential"
+    jitter: true
+  
+  # 歷史記錄配置
+  history_limit: 100
+  
+  # ADC 配置
+  adc:
+    scopes:
+      - "https://www.googleapis.com/auth/drive.readonly"
+  
+  # Service Account 配置
+  service_account:
+    service_account_file: "service_account.json"
+    scopes:
+      - "https://www.googleapis.com/auth/drive"
+      - "https://www.googleapis.com/auth/drive.file"
+  
+  # Simple Auth 配置
+  simple:
+    scopes: "readonly"
+    token_file: "simple_token.pickle"
 
 # 下載設定
 download:
