@@ -65,11 +65,20 @@ class GoogleFileConverter(LoggerMixin):
         }
     }
     
+    # 預設 Office 格式對應
+    DEFAULT_OFFICE_FORMATS = {
+        'application/vnd.google-apps.document': 'docx',        # Google Docs → Word
+        'application/vnd.google-apps.spreadsheet': 'xlsx',    # Google Sheets → Excel
+        'application/vnd.google-apps.presentation': 'pptx',   # Google Slides → PowerPoint
+        'application/vnd.google-apps.drawing': 'png',         # Google Drawings → PNG
+        'application/vnd.google-apps.form': 'zip'             # Google Forms → ZIP
+    }
+    
     def __init__(self):
         self.logger.debug("Google 檔案轉換器已初始化")
     
     def get_export_format(self, mime_type: str, preferred_format: str = None) -> Optional[str]:
-        """取得匯出格式
+        """取得匯出格式（預設為 Office 格式）
         
         Args:
             mime_type: Google Workspace 檔案的 MIME 類型
@@ -87,8 +96,32 @@ class GoogleFileConverter(LoggerMixin):
         if preferred_format and preferred_format in available_formats:
             return available_formats[preferred_format]
         
-        # 返回預設格式（第一個）
+        # 如果沒有指定格式，使用預設的 Office 格式
+        if mime_type in self.DEFAULT_OFFICE_FORMATS:
+            office_format = self.DEFAULT_OFFICE_FORMATS[mime_type]
+            if office_format in available_formats:
+                return available_formats[office_format]
+        
+        # 最後退回到第一個可用格式
         return next(iter(available_formats.values()))
+    
+    def get_office_format_name(self, mime_type: str) -> str:
+        """取得 Office 格式名稱（用於顯示）
+        
+        Args:
+            mime_type: Google Workspace 檔案的 MIME 類型
+            
+        Returns:
+            Office 格式名稱
+        """
+        format_names = {
+            'application/vnd.google-apps.document': 'Word 文件 (.docx)',
+            'application/vnd.google-apps.spreadsheet': 'Excel 試算表 (.xlsx)',
+            'application/vnd.google-apps.presentation': 'PowerPoint 簡報 (.pptx)',
+            'application/vnd.google-apps.drawing': 'PNG 圖片 (.png)',
+            'application/vnd.google-apps.form': '表單資料 (.zip)'
+        }
+        return format_names.get(mime_type, '未知格式')
     
     def get_export_extension(self, mime_type: str, export_format: str) -> str:
         """取得匯出檔案的副檔名

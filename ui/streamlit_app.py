@@ -635,10 +635,10 @@ def download_page():
                     value=get_config('download.max_concurrent', 5)
                 )
                 
-                format_options = ["預設", "docx", "pdf", "xlsx", "csv", "png", "jpg"]
-                preferred_format = st.selectbox("偏好格式", format_options)
-                if preferred_format == "預設":
-                    preferred_format = None
+                format_options = ["自動選擇 Office 格式", "docx", "pdf", "xlsx", "csv", "pptx", "png", "jpg"]
+                preferred_format = st.selectbox("偏好格式", format_options, help="自動選擇將Google文件轉為Word、試算表轉為Excel、簡報轉為PowerPoint")
+                if preferred_format == "自動選擇 Office 格式":
+                    preferred_format = None  # 讓系統自動選擇Office格式
             
             with col3:
                 auto_start = st.checkbox("建立後自動開始", value=True)
@@ -1000,9 +1000,9 @@ def folder_browser_page():
             max_retries = 3
             
             for attempt in range(max_retries):
-                                        try:
-                            # 使用輕量級方法避免卡住
-                            folder_contents = file_handler.get_folder_contents_lite(st.session_state.current_folder_id)
+                try:
+                    # 使用輕量級方法避免卡住
+                    folder_contents = file_handler.get_folder_contents_lite(st.session_state.current_folder_id)
                     break  # 成功則跳出重試迴圈
                 except Exception as e:
                     logger.error(f"載入資料夾失敗 (嘗試 {attempt + 1}/{max_retries}): {e}")
@@ -1302,11 +1302,18 @@ def folder_browser_page():
                 st.markdown("**下載選項**")
                 include_subfolders = st.checkbox("包含子資料夾", value=True)
                 max_concurrent = st.slider("最大並發數", min_value=1, max_value=10, value=3)
-                preferred_format = st.selectbox(
-                    "Google Workspace 檔案格式",
-                    ["pdf", "docx", "xlsx", "pptx", "txt", "html"],
-                    index=0
-                )
+                st.markdown("**Google Workspace 檔案轉換**")
+                office_conversion = st.checkbox("🔄 自動轉換為 Office 格式", value=True, help="Google文件→Word、試算表→Excel、簡報→PowerPoint")
+                
+                if office_conversion:
+                    st.info("✅ 將自動轉換：Google文件→Word (.docx)、試算表→Excel (.xlsx)、簡報→PowerPoint (.pptx)")
+                    preferred_format = None  # 使用預設Office格式
+                else:
+                    preferred_format = st.selectbox(
+                        "手動選擇格式",
+                        ["pdf", "docx", "xlsx", "pptx", "txt", "html"],
+                        index=0
+                    )
             
             with col2:
                 st.markdown("**輸出設定**")
