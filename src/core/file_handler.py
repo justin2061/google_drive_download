@@ -4,12 +4,15 @@ Google Drive 檔案處理器
 """
 
 import io
+import ssl
+import time
 from typing import List, Dict, Any, Optional, Generator
 from pathlib import Path
 import mimetypes
 
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaIoBaseDownload
+import requests.exceptions
 
 from ..utils.logger import LoggerMixin
 from ..utils.helpers import (
@@ -25,6 +28,7 @@ from ..utils.exceptions import (
     ValidationError
 )
 from .auth import get_authenticated_service, ensure_authenticated
+from .retry_manager import RetryManager, RetryStrategy
 
 
 class GoogleFileConverter(LoggerMixin):
@@ -116,6 +120,15 @@ class FileHandler(LoggerMixin):
         self.drive_service = drive_service
         self.converter = GoogleFileConverter()
         
+        # 初始化重試管理器
+        self.retry_manager = RetryManager(
+            max_retries=3,
+            base_delay=1.0,
+            max_delay=30.0,
+            strategy=RetryStrategy.EXPONENTIAL,
+            jitter=True
+        )
+        
         self.logger.info("檔案處理器已初始化")
     
     def _get_drive_service(self):
@@ -123,6 +136,54 @@ class FileHandler(LoggerMixin):
         if self.drive_service is None:
             self.drive_service = get_authenticated_service('drive')
         return self.drive_service
+    
+    def _safe_api_call(self, api_call_func, *args, **kwargs):
+        """安全的 API 呼叫，帶有重試機制
+        
+        Args:
+            api_call_func: API 呼叫函數
+            *args: 函數參數
+            **kwargs: 函數關鍵字參數
+            
+        Returns:
+            API 呼叫結果
+        """
+        # 定義可重試的異常
+        retryable_exceptions = (
+            ConnectionError,
+            TimeoutError,
+            ssl.SSLError,
+            requests.exceptions.RequestException,
+            requests.exceptions.ConnectionError,
+            requests.exceptions.Timeout,
+            requests.exceptions.SSLError,
+        )
+        
+        def wrapped_call():
+            try:
+                return api_call_func(*args, **kwargs)
+            except retryable_exceptions as e:
+                self.logger.warning(f"網路錯誤，將重試: {e}")
+                raise
+            except HttpError as e:
+                # 某些 HTTP 錯誤也可以重試
+                if e.resp.status in [429, 500, 502, 503, 504]:
+                    self.logger.warning(f"HTTP 錯誤 {e.resp.status}，將重試: {e}")
+                    raise
+                else:
+                    # 不可重試的 HTTP 錯誤
+                    raise
+        
+        result = self.retry_manager.retry_sync(
+            wrapped_call,
+            custom_exceptions=retryable_exceptions + (HttpError,)
+        )
+        
+        if not result.success:
+            self.logger.error(f"API 呼叫失敗，已重試 {result.attempts} 次: {result.error}")
+            raise result.error
+        
+        return result.result
     
     @ensure_authenticated
     def get_file_info(self, file_id: str) -> Dict[str, Any]:
@@ -140,10 +201,14 @@ class FileHandler(LoggerMixin):
         try:
             drive_service = self._get_drive_service()
             
-            file_info = drive_service.files().get(
-                fileId=file_id,
-                fields='id,name,mimeType,size,createdTime,modifiedTime,parents,webViewLink'
-            ).execute()
+            # 使用安全的 API 呼叫
+            def api_call():
+                return drive_service.files().get(
+                    fileId=file_id,
+                    fields='id,name,mimeType,size,createdTime,modifiedTime,parents,webViewLink'
+                ).execute()
+            
+            file_info = self._safe_api_call(api_call)
             
             self.logger.debug(f"取得檔案資訊: {file_info.get('name')}")
             return file_info
@@ -158,22 +223,29 @@ class FileHandler(LoggerMixin):
                 raise NetworkError(f"HTTP 錯誤: {e}", status_code=error_code, file_id=file_id)
         
         except Exception as e:
-            self.logger.error(f"取得檔案資訊失敗: {e}")
+            self.logger.error(f"取得檔案資訊失敗: {e} (檔案ID: {file_id})")
             raise
     
     @ensure_authenticated
-    def get_folder_contents(self, folder_id: str, recursive: bool = False) -> List[Dict[str, Any]]:
+    def get_folder_contents(self, folder_id: str, recursive: bool = False, max_depth: int = 10, current_depth: int = 0) -> List[Dict[str, Any]]:
         """取得資料夾內容
         
         Args:
             folder_id: 資料夾 ID
             recursive: 是否遞迴取得子資料夾內容
+            max_depth: 最大遞迴深度（防止無限遞迴）
+            current_depth: 當前遞迴深度
             
         Returns:
             檔案清單
         """
         if not validate_file_id(folder_id):
             raise ValidationError('folder_id', folder_id, "無效的資料夾 ID 格式")
+        
+        # 檢查遞迴深度
+        if current_depth > max_depth:
+            self.logger.warning(f"達到最大遞迴深度 {max_depth}，停止遞迴")
+            return []
         
         try:
             files = []
@@ -184,18 +256,36 @@ class FileHandler(LoggerMixin):
             if folder_info.get('mimeType') != 'application/vnd.google-apps.folder':
                 raise ValidationError('folder_id', folder_id, "指定的 ID 不是資料夾")
             
+            self.logger.info(f"處理資料夾: {folder_info.get('name')} (深度: {current_depth})")
+            
             # 取得資料夾內容
             page_token = None
+            page_count = 0
+            max_pages = 100  # 最多處理 100 頁，防止無限循環
             
             while True:
+                page_count += 1
+                if page_count > max_pages:
+                    self.logger.warning(f"達到最大頁數限制 {max_pages}，停止載入更多內容")
+                    break
+                
                 query = f"'{folder_id}' in parents and trashed=false"
                 
-                results = drive_service.files().list(
-                    q=query,
-                    pageSize=1000,
-                    pageToken=page_token,
-                    fields='nextPageToken,files(id,name,mimeType,size,createdTime,modifiedTime,parents,webViewLink)'
-                ).execute()
+                # 使用安全的 API 呼叫
+                def api_call():
+                    return drive_service.files().list(
+                        q=query,
+                        pageSize=50,  # 進一步降低每次請求的數量
+                        pageToken=page_token,
+                        fields='nextPageToken,files(id,name,mimeType,size,createdTime,modifiedTime,parents,webViewLink)'
+                    ).execute()
+                
+                try:
+                    results = self._safe_api_call(api_call)
+                except Exception as e:
+                    # 如果遇到 500 錯誤等，記錄並跳過這個分頁
+                    self.logger.error(f"載入分頁失敗，跳過: {e}")
+                    break
                 
                 items = results.get('files', [])
                 files.extend(items)
@@ -203,21 +293,49 @@ class FileHandler(LoggerMixin):
                 page_token = results.get('nextPageToken')
                 if not page_token:
                     break
+                
+                # 短暫延遲，避免過快的請求
+                time.sleep(0.2)
+                
+                # 每 10 頁給出進度日誌
+                if page_count % 10 == 0:
+                    self.logger.info(f"已載入 {page_count} 頁，共 {len(files)} 個項目")
             
-            self.logger.info(f"取得資料夾內容: {len(files)} 個項目")
+            self.logger.info(f"取得資料夾內容: {len(files)} 個項目 (共 {page_count} 頁)")
             
             # 遞迴處理子資料夾
-            if recursive:
+            if recursive and current_depth < max_depth:
                 all_files = []
+                folder_count = 0
+                
                 for file_info in files:
                     all_files.append(file_info)
                     
                     if file_info.get('mimeType') == 'application/vnd.google-apps.folder':
+                        folder_count += 1
+                        
+                        # 限制每層最多處理的資料夾數量
+                        if folder_count > 50:
+                            self.logger.warning(f"達到單層資料夾數量限制 50，停止處理更多子資料夾")
+                            break
+                        
                         try:
-                            sub_files = self.get_folder_contents(file_info['id'], recursive=True)
+                            # 短暫延遲，避免過快的遞迴請求
+                            time.sleep(0.3)
+                            self.logger.debug(f"遞迴處理子資料夾: {file_info['name']} (深度: {current_depth + 1})")
+                            
+                            sub_files = self.get_folder_contents(
+                                file_info['id'], 
+                                recursive=True, 
+                                max_depth=max_depth,
+                                current_depth=current_depth + 1
+                            )
                             all_files.extend(sub_files)
+                            
                         except Exception as e:
-                            self.logger.warning(f"無法存取子資料夾 {file_info['name']}: {e}")
+                            self.logger.warning(f"無法存取子資料夾 {file_info['name']}: {e} (檔案ID: {file_info['id']})")
+                            # 繼續處理下一個資料夾，而不是停止整個過程
+                            continue
                 
                 return all_files
             
@@ -230,10 +348,16 @@ class FileHandler(LoggerMixin):
             elif error_code == 403:
                 raise FilePermissionError(folder_id, "沒有資料夾存取權限")
             else:
-                raise NetworkError(f"HTTP 錯誤: {e}", status_code=error_code, file_id=folder_id)
+                self.logger.error(f"HTTP 錯誤 {error_code}: {e} (資料夾ID: {folder_id})")
+                # 對於 500 錯誤等，不拋出異常，而是返回空列表
+                if error_code >= 500:
+                    self.logger.warning(f"伺服器錯誤，返回空結果")
+                    return []
+                else:
+                    raise NetworkError(f"HTTP 錯誤: {e}", status_code=error_code, file_id=folder_id)
         
         except Exception as e:
-            self.logger.error(f"取得資料夾內容失敗: {e}")
+            self.logger.error(f"取得資料夾內容失敗: {e} (資料夾ID: {folder_id})")
             raise
     
     @ensure_authenticated
@@ -485,6 +609,48 @@ class FileHandler(LoggerMixin):
             'google_workspace_files': google_workspace_files,
             'regular_files': total_files - google_workspace_files
         }
+
+    def get_folder_contents_lite(self, folder_id: str) -> List[Dict[str, Any]]:
+        """輕量級取得資料夾內容（僅用於 UI 瀏覽）
+        
+        Args:
+            folder_id: 資料夾 ID
+            
+        Returns:
+            檔案清單（不遞迴，限制數量）
+        """
+        if not validate_file_id(folder_id):
+            raise ValidationError('folder_id', folder_id, "無效的資料夾 ID 格式")
+        
+        try:
+            drive_service = self._get_drive_service()
+            
+            # 檢查是否為資料夾
+            folder_info = self.get_file_info(folder_id)
+            if folder_info.get('mimeType') != 'application/vnd.google-apps.folder':
+                raise ValidationError('folder_id', folder_id, "指定的 ID 不是資料夾")
+            
+            # 輕量級查詢：只取前 100 個項目，不分頁
+            query = f"'{folder_id}' in parents and trashed=false"
+            
+            def api_call():
+                return drive_service.files().list(
+                    q=query,
+                    pageSize=100,  # 限制為 100 個項目
+                    orderBy='folder,name',  # 資料夾優先，然後按名稱排序
+                    fields='files(id,name,mimeType,size,modifiedTime)'  # 只取必要欄位
+                ).execute()
+            
+            results = self._safe_api_call(api_call)
+            files = results.get('files', [])
+            
+            self.logger.debug(f"輕量級載入資料夾內容: {len(files)} 個項目")
+            return files
+            
+        except Exception as e:
+            self.logger.error(f"輕量級載入失敗: {e} (資料夾ID: {folder_id})")
+            # 發生錯誤時返回空列表，而不是拋出異常
+            return []
 
 
 # 全域檔案處理器實例

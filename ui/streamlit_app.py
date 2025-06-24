@@ -565,6 +565,18 @@ def sidebar():
         if st.button("🔄 立即重新整理", use_container_width=True):
             st.rerun()
         
+        # 網路診斷按鈕
+        if st.button("🔍 網路診斷", use_container_width=True):
+            with st.spinner("正在檢查網路連接..."):
+                try:
+                    # 簡單的 Google API 連接測試
+                    drive_service = auth_manager.get_drive_service()
+                    about = drive_service.about().get(fields='user').execute()
+                    st.success("✅ Google Drive API 連接正常")
+                except Exception as e:
+                    st.error(f"❌ 網路連接問題: {e}")
+                    st.info("💡 建議：\n1. 檢查網路連接\n2. 嘗試重新登入\n3. 檢查防火牆設定")
+        
         st.markdown("---")
         
         # 統計資訊
@@ -656,7 +668,7 @@ def download_page():
                     # 如果是資料夾，顯示內容統計
                     if file_info.get('mimeType') == 'application/vnd.google-apps.folder':
                         with st.spinner("正在分析資料夾內容..."):
-                            contents = file_handler.get_folder_contents(file_id, recursive=True)
+                            contents = file_handler.get_folder_contents(file_id, recursive=True, max_depth=3)
                             stats = file_handler.get_download_stats(contents)
                         
                         st.info(f"📂 資料夾包含 {stats['total_files']} 個檔案，總大小 {format_bytes(stats['total_size'])}")
@@ -906,23 +918,26 @@ def tasks_page():
 
 def get_root_folder_contents():
     """取得根資料夾的內容"""
-    try:
-        # 先取得 Drive 服務
-        drive_service = auth_manager.get_drive_service()
-        
-        # 直接列出根目錄下的資料夾（不需要取得 rootFolderId）
-        results = drive_service.files().list(
-            q="'root' in parents and trashed=false",
-            orderBy='folder,name',
-            pageSize=100,
-            fields='files(id,name,mimeType,modifiedTime,size,parents)'
-        ).execute()
-        return results.get('files', [])
-        
-    except Exception as e:
-        logger.error(f"取得根資料夾內容失敗: {e}")
-        st.error(f"無法載入 Google Drive 內容: {e}")
-        return []
+    max_retries = 3
+    retry_delay = 1.0
+    
+    for attempt in range(max_retries):
+        try:
+            # 使用輕量級方法避免卡住
+            return file_handler.get_folder_contents_lite('root')
+            
+        except Exception as e:
+            logger.error(f"取得根資料夾內容失敗 (嘗試 {attempt + 1}/{max_retries}): {e}")
+            
+            if attempt < max_retries - 1:
+                # 還有重試次數，等待後重試
+                st.warning(f"⚠️ 網路連接問題，正在重試... ({attempt + 1}/{max_retries})")
+                time.sleep(retry_delay * (attempt + 1))  # 遞增延遲
+            else:
+                # 最後一次嘗試失敗
+                st.error(f"❌ 無法載入 Google Drive 內容: {e}")
+                st.info("💡 請檢查網路連接，然後點擊「重新整理」按鈕重試")
+                return []
 
 
 def folder_browser_page():
@@ -980,12 +995,25 @@ def folder_browser_page():
             # 載入根資料夾
             folder_contents = get_root_folder_contents()
         else:
-            # 載入指定資料夾
-            try:
-                folder_contents = file_handler.get_folder_contents(st.session_state.current_folder_id, recursive=False)
-            except Exception as e:
-                st.error(f"載入資料夾失敗: {e}")
-                folder_contents = []
+            # 載入指定資料夾，帶有重試機制
+            folder_contents = []
+            max_retries = 3
+            
+            for attempt in range(max_retries):
+                                        try:
+                            # 使用輕量級方法避免卡住
+                            folder_contents = file_handler.get_folder_contents_lite(st.session_state.current_folder_id)
+                    break  # 成功則跳出重試迴圈
+                except Exception as e:
+                    logger.error(f"載入資料夾失敗 (嘗試 {attempt + 1}/{max_retries}): {e}")
+                    
+                    if attempt < max_retries - 1:
+                        st.warning(f"⚠️ 載入資料夾時遇到問題，正在重試... ({attempt + 1}/{max_retries})")
+                        time.sleep(1.0 * (attempt + 1))  # 遞增延遲
+                    else:
+                        st.error(f"❌ 載入資料夾失敗: {e}")
+                        st.info("💡 請檢查網路連接，然後點擊「重新整理」按鈕重試")
+                        folder_contents = []
     
     if not folder_contents:
         st.info("📭 此資料夾是空的或載入失敗")
@@ -1116,7 +1144,7 @@ def folder_browser_page():
                             ">
                                 <div>
                                     <div style="font-size: 24px; margin-bottom: 8px;">📁</div>
-                                    <div style="font-weight: bold; font-size: 14px; margin-bottom: 5px; word-wrap: break-word;">
+                                    <div style="font-weight: bold; font-size: 14px; margin-bottom: 5px; word-wrap: break-word; text-align: center; color: #333;">
                                         {folder_name_display}
                                     </div>
                                     <div style="font-size: 12px; color: #666;">
@@ -1291,9 +1319,9 @@ def folder_browser_page():
                 # 預估資訊
                 try:
                     with st.spinner("計算資料夾大小..."):
-                        folder_stats = file_handler.get_download_stats(
-                            file_handler.get_folder_contents(selected_folder['id'], recursive=include_subfolders)
-                        )
+                                            folder_stats = file_handler.get_download_stats(
+                        file_handler.get_folder_contents(selected_folder['id'], recursive=include_subfolders, max_depth=5)
+                    )
                     
                     st.markdown("**預估資訊**")
                     st.text(f"檔案數量: {folder_stats.get('total_files', 0)}")
@@ -1307,10 +1335,11 @@ def folder_browser_page():
             
             with button_col1:
                 if st.button("✅ 開始下載", type="primary", use_container_width=True):
-                    # 創建下載任務
+                    # 創建下載任務 - 避免在 UI 中進行耗時操作
                     try:
                         folder_url = f"https://drive.google.com/drive/folders/{selected_folder['id']}"
                         
+                        # 快速創建任務，不進行預先分析
                         task_id = download_manager.create_task(
                             source_url=folder_url,
                             output_path=Path(output_path),
@@ -1319,13 +1348,15 @@ def folder_browser_page():
                         )
                         
                         st.success(f"✅ 下載任務已創建！任務 ID: {task_id}")
+                        st.info("📋 任務將在後台進行分析和下載，請到「任務管理」頁面查看進度")
                         
                         # 清除狀態
                         st.session_state.show_download_options = False
                         st.session_state.selected_folder_for_download = None
                         
-                        # 切換到任務管理頁面
-                        time.sleep(1)
+                        # 提示用戶切換到任務管理頁面
+                        st.balloons()
+                        time.sleep(2)
                         st.rerun()
                         
                     except Exception as e:
@@ -1354,7 +1385,20 @@ def folder_browser_page():
             
             try:
                 with st.spinner("載入資料夾內容詳細資訊..."):
-                    preview_contents = file_handler.get_folder_contents(selected_folder['id'], recursive=True)
+                    # 帶有重試機制的資料夾內容載入
+                    preview_contents = []
+                    max_retries = 2
+                    
+                    for attempt in range(max_retries):
+                        try:
+                            preview_contents = file_handler.get_folder_contents(selected_folder['id'], recursive=True, max_depth=3)
+                            break
+                        except Exception as inner_e:
+                            if attempt < max_retries - 1:
+                                st.warning(f"⚠️ 載入預覽時遇到問題，正在重試...")
+                                time.sleep(2.0)
+                            else:
+                                raise inner_e
                 
                 # 統計分析
                 total_files = len([f for f in preview_contents if f.get('mimeType') != 'application/vnd.google-apps.folder'])
@@ -1458,6 +1502,28 @@ def folder_browser_page():
                     st.session_state.show_folder_preview = False
                     st.rerun()
 
+    # 性能提示
+    if st.session_state.get('show_download_options', False) or st.session_state.get('show_folder_preview', False):
+        with st.expander("⚡ 性能優化提示", expanded=False):
+            st.markdown("""
+            ### 🚀 避免應用程式卡住的建議
+            
+            **對於大型資料夾：**
+            - ✅ **直接下載**：不需要預覽，直接創建下載任務
+            - ✅ **限制遞迴深度**：系統已自動限制遞迴深度為 3-5 層
+            - ✅ **分批處理**：系統會自動分批處理大量檔案
+            
+            **如果應用程式無響應：**
+            1. 🔄 重新整理瀏覽器頁面
+            2. 🔄 重新啟動 Streamlit 應用程式
+            3. 💡 使用「輕量級」瀏覽模式（已啟用）
+            
+            **推薦操作流程：**
+            1. 📁 瀏覽到目標資料夾
+            2. 📥 直接點擊「下載」（跳過預覽）
+            3. 📋 到「任務管理」頁面監控進度
+            """)
+
 
 def main():
     """主函數"""
@@ -1468,6 +1534,11 @@ def main():
     if not check_authentication():
         authentication_page()
         return
+    
+    # 性能警告
+    if 'performance_warning_shown' not in st.session_state:
+        st.session_state.performance_warning_shown = True
+        st.info("💡 **性能提示**：本應用已優化大型資料夾處理。如遇到卡頓，請使用「重新整理」或重新啟動應用程式。")
     
     # 側邊欄
     sidebar()
