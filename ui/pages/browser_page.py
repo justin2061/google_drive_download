@@ -13,6 +13,12 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from src.core.file_handler import file_handler
 from src.core.downloader import download_manager
+from src.core.paginated_loader import (
+    PaginatedFolderLoader,
+    load_folder_paginated,
+    folder_loader_cache,
+    LoadingStatus
+)
 from src.utils.helpers import format_bytes
 from src.utils.logger import get_logger
 
@@ -128,30 +134,91 @@ def _render_search_filter():
 
 
 def _load_folder_contents():
-    """載入資料夾內容"""
+    """載入資料夾內容（支援分頁載入）"""
     current_folder_id = SessionManager.get('current_folder_id')
+    folder_id = current_folder_id if current_folder_id else 'root'
 
-    with st.spinner("🔄 載入資料夾內容..."):
-        max_retries = 3
+    # 檢查是否需要重新載入（資料夾切換時）
+    loader_key = f'folder_loader_{folder_id}'
+    cached_loader = SessionManager.get(loader_key)
 
-        for attempt in range(max_retries):
-            try:
-                if current_folder_id is None:
-                    return file_handler.get_folder_contents_lite('root')
-                else:
-                    return file_handler.get_folder_contents_lite(current_folder_id)
-            except Exception as e:
-                logger.error(f"載入資料夾失敗 (嘗試 {attempt + 1}/{max_retries}): {e}")
+    # 如果沒有快取的載入器或需要重新載入，建立新的
+    if cached_loader is None:
+        try:
+            loader = load_folder_paginated(folder_id, page_size=50, use_cache=True)
 
-                if attempt < max_retries - 1:
-                    st.warning(f"⚠️ 載入資料夾時遇到問題，正在重試... ({attempt + 1}/{max_retries})")
-                    time.sleep(1.0 * (attempt + 1))
-                else:
-                    st.error(f"❌ 載入資料夾失敗: {e}")
-                    st.info("💡 請檢查網路連接，然後點擊「重新整理」按鈕重試")
-                    return []
+            # 載入第一頁
+            with st.spinner("🔄 載入資料夾內容..."):
+                result = loader.load_next_page()
 
-    return []
+            if not result:
+                st.error(f"❌ 載入資料夾失敗: {result.error}")
+                st.info("💡 請檢查網路連接，然後點擊「重新整理」按鈕重試")
+                return []
+
+            # 儲存載入器狀態
+            SessionManager.set(loader_key, {
+                'items': loader.items,
+                'has_more': loader.has_more(),
+                'total_loaded': loader.state.total_items,
+                'folder_id': folder_id
+            })
+
+            return loader.items
+
+        except Exception as e:
+            logger.error(f"載入資料夾失敗: {e}")
+            st.error(f"❌ 載入資料夾失敗: {e}")
+            st.info("💡 請檢查網路連接，然後點擊「重新整理」按鈕重試")
+            return []
+
+    # 使用快取的內容
+    return cached_loader.get('items', [])
+
+
+def _render_load_more_button():
+    """渲染「載入更多」按鈕"""
+    current_folder_id = SessionManager.get('current_folder_id')
+    folder_id = current_folder_id if current_folder_id else 'root'
+    loader_key = f'folder_loader_{folder_id}'
+
+    cached_loader = SessionManager.get(loader_key)
+
+    if cached_loader and cached_loader.get('has_more', False):
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            total_loaded = cached_loader.get('total_loaded', 0)
+            st.info(f"📊 已載入 {total_loaded} 個項目，還有更多內容")
+
+            if st.button("📥 載入更多", use_container_width=True, type="secondary"):
+                _load_more_items(folder_id, loader_key)
+
+
+def _load_more_items(folder_id: str, loader_key: str):
+    """載入更多項目"""
+    try:
+        # 取得新的載入器並載入下一頁
+        loader = load_folder_paginated(folder_id, page_size=50, use_cache=True)
+
+        # 載入下一頁
+        with st.spinner("🔄 載入更多內容..."):
+            result = loader.load_next_page()
+
+        if result:
+            # 更新快取狀態
+            SessionManager.set(loader_key, {
+                'items': loader.items,
+                'has_more': loader.has_more(),
+                'total_loaded': loader.state.total_items,
+                'folder_id': folder_id
+            })
+            st.rerun()
+        else:
+            st.error(f"❌ 載入更多內容失敗: {result.error}")
+
+    except Exception as e:
+        logger.error(f"載入更多內容失敗: {e}")
+        st.error(f"❌ 載入更多內容失敗: {e}")
 
 
 def _apply_filters(folder_contents, search_query, file_type_filter, sort_order):
@@ -229,6 +296,13 @@ def _render_quick_actions():
 
         with col2:
             if st.button("🔄 重新整理", use_container_width=True):
+                # 清除當前資料夾的快取
+                current_folder_id = SessionManager.get('current_folder_id')
+                folder_id = current_folder_id if current_folder_id else 'root'
+                loader_key = f'folder_loader_{folder_id}'
+                SessionManager.set(loader_key, None)
+                # 使全域快取失效
+                folder_loader_cache.invalidate(folder_id)
                 st.rerun()
 
         with col3:
@@ -262,9 +336,19 @@ def _render_folder_contents(folders, files):
         else:
             render_file_grid(files, columns=4, max_items=20)
 
+    # 載入更多按鈕（分頁載入）
+    st.markdown("---")
+    _render_load_more_button()
+
 
 def _on_folder_enter(folder_id: str, folder_name: str):
     """資料夾進入回調"""
+    # 清除舊資料夾的快取
+    old_folder_id = SessionManager.get('current_folder_id')
+    if old_folder_id:
+        old_loader_key = f'folder_loader_{old_folder_id}'
+        SessionManager.set(old_loader_key, None)
+
     SessionManager.navigate_to_folder(folder_id, folder_name)
     st.rerun()
 
