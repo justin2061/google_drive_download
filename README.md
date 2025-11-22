@@ -32,6 +32,18 @@
 - ⌨️ **命令行介面**（腳本自動化）
 - 📦 **一鍵執行腳本**（快速啟動）
 
+## 📚 文件資源
+
+完整的文件已整理至 `docs/` 資料夾：
+
+- **[📖 從零開始教學](docs/guides/getting-started.md)** - 新手必讀，完整的安裝和使用教學
+- **[🔐 ADC 認證指南](docs/guides/adc-guide.md)** - Google 認證設定詳解
+- **[🔄 Office 格式轉換](docs/guides/office-conversion.md)** - 自動轉換功能說明
+- **[📋 備份方案比較](docs/guides/backup-options.md)** - 各種備份方式的優缺點
+- **[📁 完整文件索引](docs/README.md)** - 所有文件的目錄
+
+---
+
 ## 🚀 快速開始
 
 ### 1. 安裝依賴套件
@@ -376,11 +388,14 @@ A: 支援所有 Google Drive 中的檔案類型，包括：
 
 ## 🤝 貢獻和支援
 
+### 📖 完整文件
+詳細的使用指南和開發文件請參閱 **[文件中心](docs/README.md)**。
+
 ### 🐛 問題回報
 如果發現 Bug 或有功能建議，請在 GitHub Issues 中回報。
 
 ### 💡 功能建議
-歡迎提出新功能建議或改進意見。
+歡迎提出新功能建議或改進意見。詳見 **[貢獻指南](docs/development/contributing.md)**。
 
 ### 📄 授權條款
 本專案採用 MIT 授權條款，詳見 `LICENSE` 檔案。
